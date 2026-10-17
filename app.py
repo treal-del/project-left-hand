@@ -1,51 +1,74 @@
+"""
+app.py - Streamlit web app for Project Left Hand.
+Run locally with:  streamlit run app.py
+"""
+
 import streamlit as st
 
-# Title of the web page
-st.title("Project Left Hand 🫀")
-st.markdown("*Cardiac risk screening for dialysis patients*")
-
-st.write("---")  # Draws a horizontal line
-
-# INPUT SECTION
-st.header("Patient Information")
-
-# Number input for blood pressure
-bp = st.number_input(
-    "Systolic Blood Pressure (top number)", 
-    min_value=50, 
-    max_value=250, 
-    value=120
+from logic import (
+    ACCESS_ARM, OTHER_ARM, UNSURE,
+    EMERGENCY, HIGH, MODERATE,
+    DISCLAIMER, assess,
 )
 
-# Checkboxes for symptoms
-pain = st.checkbox("Is the patient experiencing arm pain?")
+st.set_page_config(page_title="Project Left Hand", page_icon="🫀")
+
+st.title("Project Left Hand 🫀")
+st.markdown("*Cardiac risk screening for dialysis patients*")
+st.info(DISCLAIMER)
+st.write("---")
+
+# --- INPUTS ----------------------------------------------------------------
+st.header("Patient Information")
+
+bp = st.number_input(
+    "Systolic blood pressure (top number, mmHg)",
+    min_value=50,
+    max_value=250,
+    value=120,
+)
+
 dialysis = st.checkbox("Is the patient currently on dialysis?")
+pain = st.checkbox("Is the patient experiencing arm pain?")
+
+# Only ask which arm when it actually changes the advice.
+pain_location = UNSURE
+if dialysis and pain:
+    choice = st.radio(
+        "Where is the arm pain?",
+        ["In the arm with the dialysis access",
+         "In the other arm",
+         "Not sure"],
+    )
+    pain_location = {
+        "In the arm with the dialysis access": ACCESS_ARM,
+        "In the other arm": OTHER_ARM,
+        "Not sure": UNSURE,
+    }[choice]
+
+chest = st.checkbox("Chest pain, shortness of breath, or sweating?")
 
 st.write("---")
 
-# BUTTON AND OUTPUT
+# --- OUTPUT ----------------------------------------------------------------
 if st.button("Calculate Risk", type="primary"):
-    
-    # EMERGENCY first
-    if bp >= 180:
-        st.error("🔴 EMERGENCY: Hypertensive Crisis (BP ≥ 180). Seek immediate care.")
-    elif bp < 90:
-        st.error("🔴 EMERGENCY: Hypotension (BP < 90). Seek immediate care.")
-    
-    # HIGH RISK
-    elif bp >= 140 and (pain or dialysis):
-        st.error("🔴 HIGH RISK: See a cardiologist today.")
-        if dialysis and pain:
-            st.warning("⚠️ Check vascular access site immediately.")
-    
-    # MODERATE RISK
-    elif bp >= 140 or dialysis:
-        st.warning("🟡 MODERATE RISK: Monitor closely and schedule follow-up.")
-    
-    # LOW RISK
+    result = assess(
+        bp=bp,
+        arm_pain=pain,
+        dialysis=dialysis,
+        chest_symptoms=chest,
+        pain_location=pain_location,
+    )
+
+    if result.level in (EMERGENCY, HIGH):
+        st.error("🔴 " + result.headline)
+    elif result.level == MODERATE:
+        st.warning("🟡 " + result.headline)
     else:
-        st.success("🟢 LOW RISK: Continue routine monitoring.")
-    
-    # NSAID warning for all dialysis patients
-    if dialysis:
-        st.info("💊 Reminder: Dialysis patients must not take NSAIDs (like ibuprofen) without nephrologist approval.")
+        st.success("🟢 " + result.headline)
+
+    for line in result.messages:
+        st.write("• " + line)
+
+st.write("---")
+st.caption(DISCLAIMER)
