@@ -1,133 +1,215 @@
-"""
-logic.py - the single source of truth for Project Left Hand's risk rules.
+"""Safety-focused educational guidance for Project Left Hand.
 
-Both the web app (app.py) and the command-line tool (main.py) call assess(),
-so a fix made here applies to both.
-
-EDUCATIONAL TOOL ONLY. It does not diagnose anything and is not a substitute
-for a doctor or emergency services.
+This module intentionally does NOT calculate or estimate cardiac risk. It
+surfaces selected warning signs and encourages appropriate human care. It is
+not a diagnostic device, a validated screening instrument, or a substitute for
+emergency services or a clinician's advice.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from math import isfinite
+from typing import Optional
 
-# --- Risk levels -----------------------------------------------------------
+# Guidance urgency labels describe the action presented, not a disease risk.
 EMERGENCY = "emergency"
-HIGH = "high"
-MODERATE = "moderate"
-LOW = "low"
+PROMPT_CARE = "prompt_care"
+INFORMATION_ONLY = "information_only"
 
-# --- Where the arm pain is (only matters for dialysis patients) ------------
-ACCESS_ARM = "access_arm"   # the arm with the fistula / graft / catheter
-OTHER_ARM = "other_arm"     # the arm without the dialysis access
-UNSURE = "unsure"
+ACCESS_FISTULA = "fistula"
+ACCESS_GRAFT = "graft"
+ACCESS_CATHETER = "catheter"
+ACCESS_UNSURE = "unsure"
+ACCESS_TYPES = {ACCESS_FISTULA, ACCESS_GRAFT, ACCESS_CATHETER, ACCESS_UNSURE}
 
 DISCLAIMER = (
-    "This tool does not diagnose any condition and is not medical advice. "
-    "If someone has chest pain, trouble breathing, or feels very unwell, "
-    "call your local emergency number immediately."
+    "EDUCATIONAL AWARENESS TOOL ONLY — NOT MEDICAL ADVICE, NOT A DIAGNOSIS, "
+    "AND NOT A VALIDATED SCREENING TOOL. It cannot rule out a heart problem. "
+    "If a medical emergency may be happening, call your local emergency number "
+    "now; do not wait for this checklist."
 )
 
 NSAID_REMINDER = (
-    "Dialysis patients must not take NSAIDs (like ibuprofen) "
-    "without nephrologist approval."
+    "If you receive dialysis, ask your nephrology/dialysis team before using "
+    "over-the-counter pain medicines such as ibuprofen or naproxen. Do not "
+    "start, stop, or change a prescribed medicine based on this tool."
+)
+
+EMERGENCY_MESSAGE = (
+    "The symptoms selected can be warning signs of a medical emergency. Call "
+    "your local emergency number now. Do not wait for this tool to finish and "
+    "do not drive yourself. Tell the dispatcher about the symptoms and whether "
+    "the person receives dialysis. This tool cannot determine the cause."
 )
 
 
-@dataclass
-class Assessment:
-    level: str                       # one of EMERGENCY, HIGH, MODERATE, LOW
-    headline: str                    # short title for the result
-    messages: list = field(default_factory=list)  # advice lines, in order
+@dataclass(frozen=True)
+class Guidance:
+    """Action guidance; status is not a clinical risk category."""
+
+    status: str
+    headline: str
+    messages: tuple[str, ...]
+    emergency: bool = False
 
 
-def assess(bp, arm_pain, dialysis, chest_symptoms=False, pain_location=UNSURE):
+def _validate_optional_pressure(name: str, value: Optional[float]) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a positive number or None.")
+    if not isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a finite positive number or None.")
+
+
+def _validate_bool(name: str, value: bool) -> None:
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be True or False.")
+
+
+def assess(
+    *,
+    systolic_bp: Optional[float] = None,
+    diastolic_bp: Optional[float] = None,
+    dialysis: bool = False,
+    chest_discomfort: bool = False,
+    shortness_of_breath: bool = False,
+    unexplained_upper_body_pain: bool = False,
+    cold_sweat_nausea_or_lightheadedness: bool = False,
+    sudden_neurologic_symptoms: bool = False,
+    fainting_or_severe_weakness: bool = False,
+    feeling_severely_unwell: bool = False,
+    access_type: str = ACCESS_UNSURE,
+    access_site_changes: bool = False,
+    access_vibration_changed: bool = False,
+    catheter_or_dressing_problem: bool = False,
+    fever_or_chills: bool = False,
+    access_bleeding_uncontrolled: bool = False,
+) -> Guidance:
+    """Return conservative, non-diagnostic safety guidance.
+
+    Blood pressure values are optional context. They never produce a cardiac
+    risk score. Symptoms suggesting a possible acute emergency take priority.
+    Access-specific checks are displayed only as general prompts to contact a
+    dialysis team; they are not interpreted as diagnoses.
     """
-    Work out a risk level from a few simple inputs.
+    _validate_optional_pressure("Systolic blood pressure", systolic_bp)
+    _validate_optional_pressure("Diastolic blood pressure", diastolic_bp)
+    bool_fields = {
+        "dialysis": dialysis,
+        "chest_discomfort": chest_discomfort,
+        "shortness_of_breath": shortness_of_breath,
+        "unexplained_upper_body_pain": unexplained_upper_body_pain,
+        "cold_sweat_nausea_or_lightheadedness": cold_sweat_nausea_or_lightheadedness,
+        "sudden_neurologic_symptoms": sudden_neurologic_symptoms,
+        "fainting_or_severe_weakness": fainting_or_severe_weakness,
+        "feeling_severely_unwell": feeling_severely_unwell,
+        "access_site_changes": access_site_changes,
+        "access_vibration_changed": access_vibration_changed,
+        "catheter_or_dressing_problem": catheter_or_dressing_problem,
+        "fever_or_chills": fever_or_chills,
+        "access_bleeding_uncontrolled": access_bleeding_uncontrolled,
+    }
+    for name, value in bool_fields.items():
+        _validate_bool(name, value)
+    if not isinstance(access_type, str) or access_type not in ACCESS_TYPES:
+        raise ValueError(f"access_type must be one of {sorted(ACCESS_TYPES)}.")
 
-    bp              -- systolic blood pressure (top number), in mmHg
-    arm_pain        -- True if the patient has arm pain
-    dialysis        -- True if the patient is currently on dialysis
-    chest_symptoms  -- True for chest pain, shortness of breath, or sweating
-    pain_location   -- ACCESS_ARM, OTHER_ARM or UNSURE (used only when the
-                       patient is on dialysis AND has arm pain)
-    """
-    if bp <= 0:
-        raise ValueError("Blood pressure must be a positive number.")
+    messages: list[str] = []
+    emergency_symptoms = any((
+        chest_discomfort,
+        shortness_of_breath,
+        unexplained_upper_body_pain,
+        cold_sweat_nausea_or_lightheadedness,
+        sudden_neurologic_symptoms,
+        fainting_or_severe_weakness,
+        feeling_severely_unwell,
+        access_bleeding_uncontrolled,
+    ))
 
-    # Advice that applies at EVERY risk level goes in first, so it can never
-    # be skipped by an earlier branch (this was the original app.py bug).
-    notes = []
-
-    if dialysis and arm_pain:
-        if pain_location in (ACCESS_ARM, UNSURE):
-            notes.append(
-                "Check the vascular access site now for swelling, redness, "
-                "warmth, or a weak or missing thrill/pulse, and tell the "
-                "dialysis team."
+    # An emergency warning always wins; no lower-priority rule may mask it.
+    if emergency_symptoms:
+        messages.append(EMERGENCY_MESSAGE)
+        if access_bleeding_uncontrolled:
+            messages.append(
+                "For heavy or uncontrolled bleeding from dialysis access, call "
+                "emergency services. Apply firm, steady pressure with clean "
+                "gauze or a clean cloth while help is being arranged."
             )
-        if pain_location in (OTHER_ARM, UNSURE):
-            notes.append(
-                "Arm pain away from the access site (especially the left arm) "
-                "can be a sign of a heart problem in dialysis patients, "
-                "so it should not be ignored."
+        if dialysis and any((
+            access_site_changes, access_vibration_changed,
+            catheter_or_dressing_problem, fever_or_chills,
+        )):
+            messages.append(
+                "Also tell the emergency dispatcher about the dialysis access "
+                "changes. Do not delay emergency help to contact the dialysis unit."
             )
-
-    if dialysis:
-        notes.append(NSAID_REMINDER)
-
-    # --- Emergencies come first -------------------------------------------
-    if chest_symptoms:
-        return Assessment(
-            EMERGENCY,
-            "EMERGENCY: chest symptoms reported",
-            ["Chest pain, breathlessness, or sweating can signal a heart "
-             "attack. Call emergency services now."] + notes,
-        )
-
-    if bp > 180:
-        return Assessment(
-            EMERGENCY,
-            "EMERGENCY: hypertensive crisis (systolic above 180)",
-            ["Seek emergency medical care immediately."] + notes,
-        )
-
-    if bp < 90:
         if dialysis:
-            first = ("Low blood pressure during or after dialysis can cause "
-                     "dizziness and cramps. Tell the dialysis nursing staff "
-                     "or a doctor immediately.")
-        else:
-            first = ("Sit or lie down safely to avoid fainting and contact "
-                     "a doctor right away.")
-        return Assessment(
-            EMERGENCY,
-            "EMERGENCY: low blood pressure (systolic below 90)",
-            [first] + notes,
-        )
+            messages.append(NSAID_REMINDER)
+        return Guidance(EMERGENCY, "Emergency symptoms selected", tuple(messages), True)
 
-    # --- Non-emergency levels ---------------------------------------------
-    pain_away_from_access = (
-        dialysis and arm_pain and pain_location in (OTHER_ARM, UNSURE)
+    # Severe readings trigger prompt clinician contact, but a number alone is
+    # not labelled a hypertensive emergency and does not produce a risk score.
+    very_high_bp = (
+        (systolic_bp is not None and systolic_bp > 180)
+        or (diastolic_bp is not None and diastolic_bp > 120)
     )
+    low_systolic = systolic_bp is not None and systolic_bp < 90
 
-    if (bp >= 140 and (arm_pain or dialysis)) or pain_away_from_access:
-        return Assessment(
-            HIGH,
-            "HIGH RISK: see a cardiologist or doctor today",
-            ["Do not wait for the next routine appointment."] + notes,
+    if very_high_bp:
+        messages.append(
+            "This reading is in a very high range. If it is safe to do so, sit "
+            "quietly and repeat the measurement after at least one minute. If "
+            "the reading remains this high, contact a healthcare professional "
+            "immediately for instructions. If chest discomfort, trouble "
+            "breathing, weakness/numbness, vision changes, trouble speaking, "
+            "or another severe/new symptom occurs, call emergency services now. "
+            "Do not change medicine doses based on this tool."
         )
 
-    if bp >= 140 or dialysis or arm_pain:
-        return Assessment(
-            MODERATE,
-            "MODERATE RISK: monitor closely",
-            ["Keep watching symptoms and schedule a follow-up. If the pain "
-             "gets worse, spreads, or comes with chest symptoms, treat it as "
-             "an emergency."] + notes,
+    if low_systolic:
+        messages.append(
+            "The systolic reading is below 90 mm Hg. This can be concerning, "
+            "especially during or after dialysis. Contact the person's clinician "
+            "or dialysis team promptly for advice. If there is fainting, severe "
+            "weakness, confusion, chest discomfort, or trouble breathing, call "
+            "emergency services now."
         )
 
-    return Assessment(
-        LOW,
-        "LOW RISK: continue routine monitoring",
-        ["No warning signs from the information entered."] + notes,
+    access_concern = dialysis and any((
+        access_site_changes, fever_or_chills,
+        # Thrill/vibration is relevant to a fistula or graft, not a catheter.
+        (access_vibration_changed and access_type in (ACCESS_FISTULA, ACCESS_GRAFT, ACCESS_UNSURE)),
+        # Dressing/line problems are relevant to a catheter or unknown access.
+        (catheter_or_dressing_problem and access_type in (ACCESS_CATHETER, ACCESS_UNSURE)),
+    ))
+    if access_concern:
+        messages.append(
+            "Contact the dialysis team or treating clinician now for advice "
+            "about the access change, pain, skin changes, fever/chills, or "
+            "catheter/dressing problem. Do not wait until the next routine "
+            "dialysis visit. Follow the access-care instructions your team gave you."
+        )
+
+    needs_prompt_care = very_high_bp or low_systolic or access_concern
+    if dialysis:
+        messages.append(NSAID_REMINDER)
+
+    if needs_prompt_care:
+        return Guidance(
+            PROMPT_CARE,
+            "Contact a healthcare professional for guidance",
+            tuple(messages),
+            False,
+        )
+
+    return Guidance(
+        INFORMATION_ONLY,
+        "This checklist cannot assess or rule out a heart problem",
+        (
+            "No emergency warning item was selected, but that does not mean a "
+            "person is low risk or medically safe. This tool does not estimate "
+            "cardiac risk and cannot rule out a heart problem. Follow the person's "
+            "care plan and contact their healthcare team if you are concerned.",
+        ) + ((NSAID_REMINDER,) if dialysis else ()),
+        False,
     )

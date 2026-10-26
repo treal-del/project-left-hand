@@ -1,1 +1,2 @@
-streamlit
+# Install the Streamlit UI dependency. Core logic and unit tests use only Python's standard library.
+streamlit>=1.40,<2.0
